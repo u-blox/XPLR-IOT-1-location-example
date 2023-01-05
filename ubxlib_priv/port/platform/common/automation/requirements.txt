@@ -1,0 +1,11 @@
+PyYAML
+invoke
+psutil
+requests
+west
+pyserial
+pylink-square
+coloredlogs
+verboselogs
+portalocker
+lxml

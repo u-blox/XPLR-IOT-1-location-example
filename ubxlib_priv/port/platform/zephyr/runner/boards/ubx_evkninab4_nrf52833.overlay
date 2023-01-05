@@ -1,0 +1,14 @@
+&uart1 {
+    status = "okay";
+    current-speed = <115200>;
+    tx-pin = <32>;
+    rx-pin = <7>;
+/* For no flow control set "/delete-property/ rts-pin;" and corresponding for cts. Remove "hw-flow-control" line. */
+    rts-pin = <4>;
+    cts-pin = <30>;
+    hw-flow-control;
+};
+&i2c1 {
+    status = "okay";
+    /* Otherwise board default settings are good. */
+};
