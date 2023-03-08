@@ -16,43 +16,102 @@ https://developer.thingstream.io/guides/location-services/tokens
 https://developer.thingstream.io/guides/location-services/celllocate-getting-started/location-in-the-cloud
 
 
-
-## Setup
+## Firmware Update
 
 1. Clone the XPLR-IOT-1-location-example.
 
-2. Set your CellLocate token in the code, save it and build. You can also tweek the configuration parameters in the code. For the details, see [Description](#description).   
+2. Go to location *XPLR1-IOT-location-example/image_flashing*. The folder with contain a pre-build binary named **celllocate-wifi-example.bin** which can be directly flashed to the device. 
 
-3. Building the code will generate a binary file named as **app_update.bin** at the following location:
+3. If some tweaks are done in the firmware, build the code again.   
 
+4. Building the code will generate a binary file named as **app_update.bin** at the following location:
 *XPLR1-IOT-location-example/celllocate-wifi-example/build/zephyr*
 
-4. Copy the **app_update.bin** file and paste it at the given location: 
-
+5. Rename the file from **app_update.bin** to **celllocate-wifi-example.bin** and copy it to the given location: 
 *XPLR1-IOT-location-example/image_flashing*
 
-5. Go to *XPLR1-IOT-location-example/image_flashing* folder. 
+6. Go to *XPLR1-IOT-location-example/image_flashing* folder. 
 
-6. Connect your XPLR-IOT-1 kit to your system and determine the COM port number for NORA-B1 on Interface 0 of the USB-UART interface. 
+7. Connect your XPLR-IOT-1 kit to your system and determine the COM port number for NORA-B1 on Interface 0 of the USB-UART interface. 
 
-7. Run *Update_XPLR-IOT-1-Location.bat* file and a pop-up window will appear input your comport as following: 
+8. Run *Update_XPLR-IOT-1-Location.bat* file and a pop-up window will appear input your comport as following:
 
 ![Bat file pop-up](../imgs/bat.PNG?raw=true)
 
-8. Input your comport and press enter. The process will start flashing **app_update.bin** image file into your kit.
+9. Input your comport, your binary file name and press enter. The process will start flashing **celllocate-wifi-example.bin** image file into your kit.
 
-9. More details about the XPLR-IOT-1 bootloader can be found in the following link: [XPLR-IOT-1](https://github.com/u-blox/XPLR-IOT-1-software/tree/main/tools_and_compiled_images)
+10. More details about the XPLR-IOT-1 bootloader can be found in the following link: [XPLR-IOT-1](https://github.com/u-blox/XPLR-IOT-1-software/tree/main/tools_and_compiled_images)
+
+
+## Configuration for Cellular and Wi-Fi
+To get the location from the XPLR-IOT-1 kit using Cellular or Wi-Fi, the device is needed to be configured accordingly. To configure the device, the steps are given as following
+
+1. Connect the device to the system using COM port for NORA-B1 on Interface 0 of the USB-UART interface.
+
+2. To configure the device, "config set" command is used. The configuration has to be set everytime the device is turned on. The command format is as following:
+
+    **config set 'CellLocateServerURL' 'Token' 'APN' 'CellRegistrationTimeout' 'NumWifiAp' 'WifiApSignalStrength'**
+
+    A sample command and the response for config set is given below:
+    ```sh
+    $ config set cell-live1.services.u-blox.com 9ARdeV0FSDKpKfSE7GpeSQ tsiot 30 10 -90
+    > CellLocateServerURL: cell-live1.services.u-blox.com, Token: 9ARXeV0FSDKpKfKE7ZpeSQ, APN: tsiot, CellRegistrationTimeout: 30, NumWifiAp: 10, WifiApSignalStrength: -90
+    ```
+
+3. To view the configuration set on the device, "config get" command is used.
+The command and the response for config get is given below:
+    ```sh
+    $ config get
+    > CellLocateServerURL: cell-live1.services.u-blox.com, Token: 9ARXeV0FSDKpKfKE7ZpeSQ, APN: tsiot, CellRegistrationTimeout: 30, NumWifiAp: 10, WifiApSignalStrength: -90
+    ```
+
+4. To get help with device configurations for using Cellular or Wi-Fi "config help" command is used.
+The command and the response for config help is given below: 
+    ```sh
+    $ config help
+    > config - Configuration of parameters
+    > Subcommands:
+    >  get  :read configuration parameters
+    >  set  :set configuration parameters: <CellLocateServerURL> <Token> <APN>
+    >        <CellRegistrationTimeout(s)> <NumWifiAp> <WifiApSignalStrength(dbm)>
+    ```
+
+## Location using CellLocate Service
+To get the location from the XPLR-IOT-1 kit using Cellular or Wi-Fi, a valid configuration setting is required as a pre-requisite for this command.
+
+1. The command to get location using cellular network is given below:
+    ```sh
+    $ location cell
+    ```
+
+2. The command to get location using Wi-Fi access points is given below:
+    ```sh
+    $ location wifi
+    ```
 
 
 ## Description
 
-The user is required to set some configurable parameters as per the requirements and the example will bring back the location based on those parameters. The configurable parameters are: 
+The user is required to set some configurable parameters using *config set* command as per the user's requirements and the example will bring back the location based on those parameters. The configurable parameters are explained below: 
 
-1. **MIN_WIFI_SIGNALSTRENGTH**:
-The user needs to set the signal strength for Wi-Fi scan in dBm with -30 dBm being the maximum signal strength and -90 dBm being the minimum:
+1. **CellLocateServerURL**
+The URL of the CellLocate server which the service pings to get the location. The maximum length of the URL is 100 bytes. 
 
-`#define MIN_WIFI_SIGNALSTRENGTH <your_desired_signal_strength>`
 
+2. **Token**:
+The user needs to enter the CellLocate service token against which the device is registered on Thingstream. The maximum allowed length of token is 25 bytes. 
+
+3. **APN**:
+The user needs to set the APN name for the network being used to run the example. The maximum allowed length is 50bytes. 
+
+4. **CellRegistrationTimeout**:
+The time for which the device waits to establish a successful connection with the network. The range of allowed timeout is 1sec to 300sec.  
+
+5. **NumWifiAp**: 
+The user needs to set the no. of Wi-Fi access points as per the requirements. The allowed range for APs is between 5 to 15. 
+
+6. **WifiApSignalStrength**
+The user needs to set the signal strength for Wi-Fi scan in dBm with 0 dBm being the maximum signal strength and -100 dBm being the minimum.
 A list of Wi-Fi signal strength is given below for reference:  
 
 * -30 dBm	: Maximum signal strength.
@@ -63,37 +122,9 @@ A list of Wi-Fi signal strength is given below for reference:
 * -80 dBm	: Minimum value required to make a connection.
 * -90 dBm	: Unlikely able to connect or make use of any services 
 
-2. **NUM_WIFI_ACCESSPOINT**: 
-The minimum number of Wi-Fi access points accepted by the service to calculate the location is 5. So, the user needs to set the maximum limit of access point provided that the value is not less than 5:
 
-`#define NUM_WIFI_ACCESSPOINT <your_desired_num_access_points>`
 
-3. **CELL_LOCATE_TOKEN**:
-The user needs to enter the CellLocate service token against which the device is registered on Thingstream:
-
-`#define CELL_LOCATE_TOKEN "<your_celllocate_token>"`
-
-4. **APN**:
-The user needs to set the APN name for the network being used to run the example
-
-`#define APN <network_apn>`
-
-5. **USE_WIFI**:
-As discussed earlier, there are two operating modes in this example: 
-  - Cell based location calculation
-  - Wi-Fi based location calculation
-
-To calculate the location based on cellular information, set this flag to 0. It will return the position based on cellular information only:
-
-`#define USE_WIFI 0`
-
-In the other case where user needs information using Wi-Fi scan, set this flag to 1 and the service will return the location based on Wi-Fi access points:
-
-`#define USE_WIFI 1`
-
-When using Wi-Fi location, the service automatically use Cell Id as backup in case a position cannot be estimated using Wi-Fi scan.
-
-Once the configurations are done, build the code and flash it in the kit. For further information of firmware flash, refer to [XPLR-IOT-1](https://github.com/u-blox/XPLR-IOT-1) and [XPLR-IOT-1-software](https://github.com/u-blox/XPLR-IOT-1-software#programmingbuilding-the-firmware)   
+Once the configurations are done, use *config get* command to verify your configurations. For further information of firmware flash, refer to [XPLR-IOT-1](https://github.com/u-blox/XPLR-IOT-1) and [XPLR-IOT-1-software](https://github.com/u-blox/XPLR-IOT-1-software#programmingbuilding-the-firmware)   
 
 
 ## Note

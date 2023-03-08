@@ -25,6 +25,8 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <string.h>
+#include <stdlib.h>
+#include <stdio.h>
 
 #include "ubxlib.h"
 #include "u_cfg_os_platform_specific.h"
@@ -38,6 +40,9 @@
 #include <console/console.h>
 
 #include "module_config.h"
+
+#include <shell/shell.h>
+#include <shell/shell_uart.h> 
 
 /* ----------------------------------------------------------------
  * ERROR CHECKING
@@ -87,6 +92,44 @@ measCfg_t msgInfo[] =  {
     { 0x0107, U_GNSS_CFG_VAL_KEY_ID_MSGOUT_UBX_NAV_PVT_UART1_U1}
 };
 
+// ------------------------- GLOBALS START ---------------------------------
+
+// Thingstream Broker URL
+#define BROKER_NAME "mqtt.thingstream.io"
+
+// Topic to publish GNSS measurements for CloudLocate
+#define PUB_TOPIC "CloudLocate/GNSS/request"
+
+// Input Parameters' Max Lengths
+#define APN_MAXLEN 50
+#define CLIENT_ID_MAXLEN 50
+#define USERNAME_MAXLEN 25
+#define PASSWORD_MAXLEN 50
+#define SUB_TOPIC_MAXLEN 100
+
+// MQTT Credentials
+char username[USERNAME_MAXLEN+1];
+char password[PASSWORD_MAXLEN+1];
+char subTopic[SUB_TOPIC_MAXLEN+1];
+char clientId[CLIENT_ID_MAXLEN+1];
+
+// APN name to set for the network
+char APN[APN_MAXLEN+1]="tsiot";
+// Timeout for Cell Registration in seconds
+int32_t cellRegistrationTimeout = 40;
+int32_t numOfSecondsToWaitForFirstMessage = 10;
+int32_t compactMsgTimeoutInSecs = 200;
+bool fallbackNavpvtEnabled = true;
+int32_t fallbackTimeoutInSecs = 80;  
+
+int32_t cellSearchstartTimeMs;
+bool isCellConnectAborted = false;
+// flag to indicate whether the configuration is done or not 
+bool configurationDone = false;
+
+// ------------------------- GLOBALS END ---------------------------------
+
+
 /* ----------------------------------------------------------------
  * COMPILE-TIME MACROS
  * -------------------------------------------------------------- */
@@ -95,44 +138,6 @@ measCfg_t msgInfo[] =  {
 #define U_GNSS_CFG_ENABLE_MSG 1
 
 #define U_GNSS_CFG_DISABLE_MSG 0
-
-/* ----------------------------------------------------------------
- * CONFIGURATION PARAMETERS
- * -------------------------------------------------------------- */
-
-// ------------------------- CONFIGURATIONS START ---------------------------------
-
-#define APN "<network-apn>"
-
-#define BROKER_NAME "mqtt.thingstream.io"
-
-#define CLIENT_ID "<mqtt-thing-client-id>"
-
-#define USERNAME "<mqtt-thing-username>"
-
-#define PASSWORD "<mqtt-thing-passowrd>"
-
-#define PUB_TOPIC "CloudLocate/GNSS/request"
-
-#define SUB_TOPIC "<mqtt-thing-subscribe-topic>"
-
-const messageType_t MSG_TYPE = MEASX;
-const int32_t NUM_OF_SECONDS_TO_WAIT_FOR_FIRST_MESSAGE = 10;
-const int32_t COMPACT_MSG_TIMEOUT_IN_SECS = 30;
-bool FALLBACK_NAVPVT_ENABLED = true;
-const int32_t FALLBACK_TIMEOUT_IN_SECS = 60; 
-// ------------------------- CONFIGURATIONS END ---------------------------------
-
-
-/* ----------------------------------------------------------------
- * GLOBAL VARIABLES
- * -------------------------------------------------------------- */
-
-const int32_t cellRegistrationTimeout = 50; 
-int32_t cellSearchstartTimeMs;
-bool isCellConnectAborted = false;
-
-
 
 /* ------------------------------------------------------------------------------
  * STATIC FUNCTION DECLERATION
@@ -196,12 +201,13 @@ void printUBXMessageinHex(char *pBuffer, int32_t bufferLenght)
     printk("\n");
 }
 
-/** \fn int32_t getMeasMessageFromGNSS(char *pBuffer, int32_t bufferLength)
+/** \fn int32_t getMeasMessageFromGNSS(char *pBuffer, int32_t bufferLength, messageType_t msgType)
  * @brief Getting meas message from GNSS receiver
  * @param[in] pBuffer buffer to be filled with meas message
- * @param[in] bufferLEngth length of the buffer
+ * @param[in] bufferLength length of the buffer
+ * @param[in] msgType type of compact message
 */
-int32_t getMeasMessageFromGNSS(char *pBuffer, int32_t bufferLength)
+int32_t getMeasMessageFromGNSS(char *pBuffer, int32_t bufferLength, messageType_t msgType)
 {
     int32_t uartHandle;
     uGnssTransportHandle_t gnssUartHandle;
@@ -218,7 +224,7 @@ int32_t getMeasMessageFromGNSS(char *pBuffer, int32_t bufferLength)
     max10BackupSupplyDisable();
     max10NoraCommEnable();
 
-    uGnssInit();   
+      
 
     uartHandle = uPortUartOpen(U_CFG_APP_GNSS_UART,
                                U_GNSS_UART_BAUD_RATE, NULL,
@@ -241,29 +247,29 @@ int32_t getMeasMessageFromGNSS(char *pBuffer, int32_t bufferLength)
             printk("Gnss Powered on\r\n");
             
             // For the selected message type in configuration, enabling that message on GNSS receiver 
-            if(uGnssCfgValSet(gnssDeviceHandle, msgInfo[MSG_TYPE].keyId, U_GNSS_CFG_ENABLE_MSG, U_GNSS_CFG_VAL_TRANSACTION_NONE,U_GNSS_CFG_VAL_LAYER_RAM) == 0) {
+            if(uGnssCfgValSet(gnssDeviceHandle, msgInfo[msgType].keyId, U_GNSS_CFG_ENABLE_MSG, U_GNSS_CFG_VAL_TRANSACTION_NONE,U_GNSS_CFG_VAL_LAYER_RAM) == 0) {
                 startTimeMs = uPortGetTickTimeMs();     
                 printk("Enabled compact message.\r\n");
 
 
                 messageId.type = U_GNSS_PROTOCOL_UBX;
-                messageId.id.ubx = msgInfo[MSG_TYPE].messageId; 
-                printk("Waiting for compact message. Timer values NUM_OF_SECONDS_TO_WAIT_FOR_FIRST_MESSAGE: %d, COMPACT_MSG_TIMEOUT_IN_SECS: %d\r\n", NUM_OF_SECONDS_TO_WAIT_FOR_FIRST_MESSAGE,COMPACT_MSG_TIMEOUT_IN_SECS);
-                while(!validMessage && ((uPortGetTickTimeMs() - startTimeMs) < (COMPACT_MSG_TIMEOUT_IN_SECS*1000))  ) //timer is expired
+                messageId.id.ubx = msgInfo[msgType].messageId; 
+                printk("Waiting for compact message. Timer values TimeToWaitForFirstMessage: %d, CompactMessageTimeout: %d\r\n", numOfSecondsToWaitForFirstMessage,compactMsgTimeoutInSecs);
+                while(!validMessage && ((uPortGetTickTimeMs() - startTimeMs) < (compactMsgTimeoutInSecs*1000))  ) //timer is expired
                 {
-                    length = uGnssMsgReceive(gnssDeviceHandle, &messageId, &pBuffer, bufferLength, COMPACT_MSG_TIMEOUT_IN_SECS*1000, NULL);
+                    length = uGnssMsgReceive(gnssDeviceHandle, &messageId, &pBuffer, bufferLength, compactMsgTimeoutInSecs*1000, NULL);
                          
-                    if (length > 0 && ((uPortGetTickTimeMs() - startTimeMs) >= (NUM_OF_SECONDS_TO_WAIT_FOR_FIRST_MESSAGE*1000)) ) //added check for the first message wait
+                    if (length > 0 && ((uPortGetTickTimeMs() - startTimeMs) >= (numOfSecondsToWaitForFirstMessage*1000)) ) //added check for the first message wait
                     {       
                         // MEASX is generated even if there is no satellite information so adding a length check
                         // so we know that whatever we are sending have atleast some satellite information in it
-                        if(MSG_TYPE == MEASX && length > 300)
+                        if(msgType == MEASX && length > 300)
                         {
                             validMessage = true;        
                         }
 
                         //CloudLocate service expects compact message(MEAS50 and MEAS20) without header and checksum so stripping down the message
-                        if(MSG_TYPE == MEAS20 || MSG_TYPE == MEAS50 )
+                        if(msgType == MEAS20 || msgType == MEAS50 )
                         {
                             unsigned char strippedMessage[50];
                             memcpy(strippedMessage,pBuffer+6,length-8);
@@ -276,15 +282,15 @@ int32_t getMeasMessageFromGNSS(char *pBuffer, int32_t bufferLength)
                         
                     }    
                 }
-                if (validMessage == false && FALLBACK_NAVPVT_ENABLED == true ){
+                if (validMessage == false && fallbackNavpvtEnabled == true ){
                     printk("No compact message found. FallBack configuration is enabled so looking for NAVPVT msg.. \n");
                     startTimeMs = uPortGetTickTimeMs();
                     uGnssCfgValSet(gnssDeviceHandle, msgInfo[(messageType_t)NAVPVT].keyId, U_GNSS_CFG_ENABLE_MSG, U_GNSS_CFG_VAL_TRANSACTION_NONE,U_GNSS_CFG_VAL_LAYER_RAM);
                     
                     messageId.id.ubx = msgInfo[(messageType_t)NAVPVT].messageId;
 
-                    while(!validMessage && ((uPortGetTickTimeMs() - startTimeMs) < (FALLBACK_TIMEOUT_IN_SECS*1000))){
-                            length = uGnssMsgReceive(gnssDeviceHandle, &messageId, &pBuffer, bufferLength, FALLBACK_TIMEOUT_IN_SECS*1000, NULL);
+                    while(!validMessage && ((uPortGetTickTimeMs() - startTimeMs) < (fallbackTimeoutInSecs*1000))){
+                            length = uGnssMsgReceive(gnssDeviceHandle, &messageId, &pBuffer, bufferLength, fallbackTimeoutInSecs*1000, NULL);
                             if (length > 0 ){
                                 if ((pBuffer[27] & 0x01) && (pBuffer[26] == 0x02 || pBuffer[26] == 0x03)) // Fix only valid when it is 2d or 3d fix and also GNSSFixOk flag is set 
                                 {
@@ -305,46 +311,73 @@ int32_t getMeasMessageFromGNSS(char *pBuffer, int32_t bufferLength)
             }
             else
             {
-                printk("Error in enabling MeasX message\r\n");
+                printk("Error in enabling meas message\r\n");
             }
         }
         else{
             printk("Could not power on GNSS\r\n");
         }
     }
-	uGnssDeinit();
-    return count;
+    uGnssRemove(gnssDeviceHandle);
+    uPortUartClose(uartHandle);
+    uGnssPwrOff(gnssDeviceHandle);
+	return count;
 
 }
 
 
-/** \fn void getLocationFromCloudLocate(const char *message, int32_t messageLength)
- * @brief Implementation of the "CloudLocate" API for XPLR-IoT-1 Kit.
- * @param[in] message meas message received from GNSS receiver
- * @param[in] messageLength length of the meas message
+/** \fn int32_t getLocationFromCloudLocate(const struct shell *shell, size_t argc, char **argv)
+ * @brief Function to request position from CloudLocate service
+ * @param[in] shell pointer to shell instance
+ * @param[in] argc count of arguments
+ * @param[in] argv pointer to array of arguments passed.
 */
-void getLocationFromCloudLocate(const char *message, int32_t messageLength){
+int32_t getLocationFromCloudLocate(const struct shell *shell, size_t argc, char **argv){
+    
+    if (configurationDone == false){
+        shell_print(shell, "Before requesting location please complete the parameter configurtion using config command\r\n");
+        return 1;
+    }
+    unsigned char gnssCompactMessage[1000];
+    int32_t gnssCompactMessageLength;
     uDeviceHandle_t devHandle;
     int32_t cellResponse;
     int32_t uartHandle;
     uAtClientHandle_t atClientHandle;
     uMqttClientContext_t *pContext = NULL;
     uMqttClientConnection_t connection = U_MQTT_CLIENT_CONNECTION_DEFAULT;
-    char buffer[1024];
-    size_t bufferSize;
-    char subTopic[200];
+    char receivedMsg[250];
+    size_t receivedMsgSize;
+    char receivedMsgTopic[200];
     volatile bool messagesAvailable = false;
     int32_t startTimeMs;
     int32_t numofRetries = 2;
     int32_t errorCode = -1;
+    messageType_t msgType; 
 
-    saraR5InitPower();
-    printk("SARA-R5 Powered on \r\n");
-    setUartConfig(SARAuart);
-    
-    uDeviceInit();
-    uAtClientInit();
-    uCellInit();
+    if (strcmp("measx", argv[1]) == 0)
+    {
+        msgType = MEASX;
+    }
+    else if (strcmp("meas50", argv[1]) == 0)
+    {
+        msgType = MEAS50;
+    }
+    else if ((strcmp("meas20", argv[1]) == 0))
+    {
+        msgType = MEAS20;
+    }
+    else {
+        printk("Invalid message type: %s\n", argv[1]);
+        return 1;
+    }
+
+    gnssCompactMessageLength = getMeasMessageFromGNSS(gnssCompactMessage, sizeof(gnssCompactMessage), msgType );
+    if (gnssCompactMessageLength <= 0 )
+    {
+        printk("Unable to get message from GNSS. Please adjust timer values in configuration parameters\n");  
+        return 1;
+    }
 
     uartHandle = uPortUartOpen(2,
                                115200, NULL,
@@ -395,9 +428,9 @@ void getLocationFromCloudLocate(const char *message, int32_t messageLength){
         pContext = pUMqttClientOpen(devHandle, NULL);
         if (pContext != NULL) {
             connection.pBrokerNameStr = BROKER_NAME;
-            connection.pClientIdStr = CLIENT_ID;
-            connection.pUserNameStr = USERNAME;
-            connection.pPasswordStr = PASSWORD;
+            connection.pClientIdStr = clientId;
+            connection.pUserNameStr = username;
+            connection.pPasswordStr = password;
 
             // Connect to the MQTT broker
             printk("Connecting to MQTT broker \"%s\"...\n", BROKER_NAME);
@@ -409,16 +442,16 @@ void getLocationFromCloudLocate(const char *message, int32_t messageLength){
                                               (void *) &messagesAvailable);
 
                 // Subscribe to the topic on the broker
-                printk("Subscribing to topic \"%s\"...\n", SUB_TOPIC);
-                if (uMqttClientSubscribe(pContext, SUB_TOPIC,
+                printk("Subscribing to topic \"%s\"...\n", subTopic);
+                if (uMqttClientSubscribe(pContext, subTopic,
                                          U_MQTT_QOS_EXACTLY_ONCE)) {
 
                     // Publish our message to our topic on the MQTT broker
                     printk("Publishing \"%s\" to topic \"%s\"...\n",
-                             message, PUB_TOPIC);
+                             gnssCompactMessage, PUB_TOPIC);
                     startTimeMs = uPortGetTickTimeMs();
-                    if (uMqttClientPublish(pContext, PUB_TOPIC, message,
-                                           messageLength,
+                    if (uMqttClientPublish(pContext, PUB_TOPIC, gnssCompactMessage,
+                                           gnssCompactMessageLength,
                                            U_MQTT_QOS_EXACTLY_ONCE,
                                            false) == 0) {
 
@@ -431,20 +464,20 @@ void getLocationFromCloudLocate(const char *message, int32_t messageLength){
 
                         // Read the new message from the broker
                         while (uMqttClientGetUnread(pContext) > 0) {
-                            bufferSize = sizeof(buffer);
-                            if (uMqttClientMessageRead(pContext, subTopic,
-                                                       sizeof(subTopic),
-                                                       buffer, &bufferSize,
+                            receivedMsgSize = sizeof(receivedMsg);
+                            if (uMqttClientMessageRead(pContext, receivedMsgTopic,
+                                                       sizeof(receivedMsgTopic),
+                                                       receivedMsg, &receivedMsgSize,
                                                        NULL) == 0) {
-                                printk("CloudLocate response:  \"%.*s\"\n",bufferSize,buffer);
+                                printk("CloudLocate response:  \"%.*s\"\n",receivedMsgSize, receivedMsg);
                             }
                         }
                     } else {
                         printk("Unable to publish our message \"%s\"!\n",
-                                 message);
+                                 gnssCompactMessage);
                     }
                 } else {
-                    printk("Unable to subscribe to topic \"%s\"!\n", SUB_TOPIC);
+                    printk("Unable to subscribe to topic \"%s\"!\n", subTopic);
                 }
                 uMqttClientDisconnect(pContext);
             } else {
@@ -461,12 +494,119 @@ void getLocationFromCloudLocate(const char *message, int32_t messageLength){
       printk("Unable to bring up the network!\n");
     }
     
-    uCellDeinit();
-    uAtClientDeinit();
-    uDeviceDeinit();
-    printk("Done.\n");
+    uCellRemove(devHandle);
+    uAtClientRemove(atClientHandle);
+    uPortUartClose(uartHandle);
+    return 0;
 }
 
+/** \fn static int getConfigParameters(const struct shell *shell, size_t argc, char **argv)
+ * @brief Function to read configuration parameters
+ * @param[in] shell pointer to shell instance
+ * @param[in] argc count of arguments
+ * @param[in] argv pointer to array of arguments passed. 
+*/
+static int getConfigParameters(const struct shell *shell, size_t argc, char **argv)
+{
+    shell_print(shell, "MqttUsername: %s, MqttPassword: %s, DeviceId: %s, APN: %s, CellRegistrationTimeout: %d, TimeToWaitForFirstMessage: %d, CompactMessageTimeout: %d, FallbackNavpvtStatus: %d, FallbackTimeout: %d \r\n",\
+    username, \
+    password,\
+    clientId,\
+    APN,\
+    cellRegistrationTimeout, \
+    numOfSecondsToWaitForFirstMessage,\
+    compactMsgTimeoutInSecs,\
+    fallbackNavpvtEnabled,\
+    fallbackTimeoutInSecs);
+    
+    return 0;
+
+}
+
+/** \fn static int setConfigParameters(const struct shell *shell, size_t argc, char **argv)
+ * @brief Function to set configuration parameters
+ * @param[in] shell pointer to shell instance
+ * @param[in] argc count of arugments
+ * @param[in] argv pointer to array of arguments passed. 
+*/
+static int setConfigParameters(const struct shell *shell, size_t argc, char **argv)
+{
+    if (argc == 10){
+        bool invalid = false;
+        uint32_t integerParameter;
+        // checks parameters validity
+        if( strlen( argv[1] ) >= USERNAME_MAXLEN ){
+            shell_error( shell," MqttUsername length cannot be greater than %d\r\n", USERNAME_MAXLEN );    
+            invalid = true;
+        }
+        if( strlen( argv[2] )  >= PASSWORD_MAXLEN ){
+            shell_error( shell,"MqttPassword length cannot be greater than %d\r\n", PASSWORD_MAXLEN );    
+            invalid = true;
+        }
+        if( strlen( argv[3] ) >= CLIENT_ID_MAXLEN ){
+            shell_error( shell,"DeviceId length cannot be greater than %d\r\n", CLIENT_ID_MAXLEN );    
+            invalid = true;
+        }
+        if( strlen( argv[4] ) >= APN_MAXLEN ){
+            shell_error( shell,"APN length cannot be greater than %d\r\n", APN_MAXLEN );    
+            invalid = true;
+        }
+        integerParameter = atoi(argv[5]);
+        if(integerParameter < 0 && integerParameter >= 300 ){
+            shell_error( shell,"CellRegistrationTimeout should be in between 1-300 seconds\r\n");    
+            invalid = true;
+        }
+        integerParameter = atoi(argv[6]);
+        if(integerParameter < 0 && integerParameter > 60 ){
+            shell_error( shell,"TimeToWaitForFirstMessage should be in between 0-60 seconds\r\n");    
+            invalid = true;
+        }
+        integerParameter = atoi(argv[7]);
+        if(integerParameter < 0 && integerParameter > 300 ){
+            shell_error( shell,"CompactMessageTimeout should be in between 0-300 seconds\r\n");    
+            invalid = true;
+        }
+        integerParameter = atoi(argv[8]);
+        if( integerParameter != 1 && integerParameter != 0 ){
+            shell_error( shell,"Enter valid FallbackNavpvtStatus\r\n");    
+            invalid = true;
+        }
+        integerParameter = atoi(argv[9]);
+        if(integerParameter < 0 && integerParameter > 60 ){
+            shell_error( shell,"FallbackTimeout should be in between 0-60 seconds\r\n");    
+            invalid = true;
+        }
+        if( invalid ){
+            return 1;
+        }
+        strcpy(username, argv[1]);
+        strcpy(password, argv[2]);
+        strcpy(clientId, argv[3]);
+        sprintf(subTopic, "CloudLocate/%s/GNSS/response", argv[3]);
+        strcpy(APN, argv[4]);
+        cellRegistrationTimeout = atoi(argv[5]);
+        numOfSecondsToWaitForFirstMessage = atoi(argv[6]);
+        compactMsgTimeoutInSecs = atoi(argv[7]);
+        fallbackNavpvtEnabled = atoi(argv[8]);
+        fallbackTimeoutInSecs = atoi(argv[9]);
+        configurationDone = true;
+        getConfigParameters(shell, argc, argv);
+
+    }
+    else {
+        shell_print(shell, "Missing params. Please enter all parameters: <MqttUsername> <MqttPassword> <DeviceId> <APN> <CellRegistrationTimeout(s)> <TimeToWaitForFirstMessage(s)> <CompactMessageTimeout(s)> <FallbackNavpvtStatus> <FallbackTimeout(s)>\r\n");
+    }
+    return 0;
+}
+
+SHELL_STATIC_SUBCMD_SET_CREATE(config_sub_cmd,
+        SHELL_CMD(get, NULL, "read configuration parameters",
+                                               getConfigParameters),
+        SHELL_CMD(set,   NULL, "set configuration parameters: <MqttUsername> <MqttPassword> <DeviceId> <APN> <CellRegistrationTimeout(s)> <TimeToWaitForFirstMessage(s)> <CompactMessageTimeout(s)> <FallbackNavpvtStatus> <FallbackTimeout(s)>", setConfigParameters),
+        SHELL_SUBCMD_SET_END
+);
+SHELL_CMD_REGISTER(location, NULL, "Get location from CloudLocate using measx/meas20/meas50", getLocationFromCloudLocate);
+SHELL_CMD_REGISTER(config, &config_sub_cmd, "Configuration of parameters", NULL);
 /** \fn void main(void)
  * @brief Main function of the code 
  */
@@ -476,17 +616,17 @@ void getLocationFromCloudLocate(const char *message, int32_t messageLength){
 
 void main(void)
 {
-    unsigned char buffer[1000];
-    int32_t msgSize;
 	VERIFY(uPortInit() == 0, "uPortInit failed\n");
-    msgSize = getMeasMessageFromGNSS(buffer, sizeof(buffer));
-    if (msgSize > 0 )
-    {
-        getLocationFromCloudLocate(buffer, msgSize);   
-    }
-    else {
-         printk("Unable to get message from GNSS. Please adjust timer values in configuration parameters\n");
-    }
-	uPortDeinit();
-    	
+    uDeviceInit();
+    uAtClientInit();
+    uCellInit();
+    uGnssInit(); 
+    
+    // Cellular network is required to publish gnss measurements to CloudLocate Service
+    printk("Turning on SARA-R5..\r\n");
+    saraR5InitPower();
+    printk("SARA-R5 Powered on \r\n");
+    setUartConfig(SARAuart);
+
+    
 }

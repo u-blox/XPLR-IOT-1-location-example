@@ -10,7 +10,9 @@ echo **********************************************
 echo.
 set /p "COMPORT=Enter the COM port number of Interface 0 (e.g. COM15): "
 echo.
+set /p "BINARY=Enter the name of the firmware binary file (e.g. app_update.bin): "
+echo.
 echo Updating Application Core:
-newtmgr.exe --conntype=serial --connstring="%COMPORT%,baud=115200" image upload app_update.bin
+newtmgr.exe --conntype=serial --connstring="%COMPORT%,baud=115200" image upload "%BINARY%"
 echo.
 pause

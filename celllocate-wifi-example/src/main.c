@@ -24,16 +24,20 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <stdbool.h>
-#include <string.h>
+#include <stdlib.h>
 
 #include "ubxlib.h"
 #include "u_cfg_os_platform_specific.h"
 
 #include <zephyr.h>
-#include <sys/printk.h>
 #include <console/console.h>
+#include <shell/shell.h>
+#include <device.h>
+#include <devicetree.h>
+#include <shell/shell_uart.h> 
 
 #include "module_config.h"
+
 
 /* ----------------------------------------------------------------
  * ERROR CHECKING
@@ -52,55 +56,32 @@ void failed(const char *msg)
     while(1);
 }
 
-/* ----------------------------------------------------------------
- * CONFIGURATION PARAMETERS
- * -------------------------------------------------------------- */
 
-// ------------------------- CONFIGURATIONS START ---------------------------------
-// WiFi signal strength
-// -30 dBm	: Maximum signal strength.
-// -50 dBm	: Excellent signal strength.
-// -60 dBm	: Still good, reliable signal strength.
-// -67 dBm	: Minimum value for all services that require smooth and reliable data traffic.
-// -70 dBm	: Signal is not very strong
-// -80 dBm	: Minimum value required to make a connection.
-// -90 dBm	: Unlikely able to connect or make use of any services
+// ------------------------- GLOBALS START ---------------------------------
 
-// Allowed signal strength = -100dBm to 0dBm
-// Set mininum wifi signal strength for WiFi position payload in dBm
-
-#define MIN_WIFI_SIGNALSTRENGTH -90
-
-
-// WiFi valid Access Points
-// - Mininum required Access Points = 5 
-// - Maximum required Access Points = 16
-// Set Boundary Conditions for MAX valid Access Points to send to CellLocate service
-#define NUM_WIFI_ACCESSPOINT 15
-
+int wifiApSignalStrength = -90;
+int numWifiAP = 15;
+#define CELL_LOCATE_TOKEN_MAXLEN   25
+#define CELL_LOCATE_SERVER_URL_MAXLEN  100
+#define APN_MAXLEN 50
 // CELL LOCATE Service Token 
-#define CELL_LOCATE_TOKEN "<your-cellLocate-token>"
+char cellLocateToken[CELL_LOCATE_TOKEN_MAXLEN+1];
 // CELL LOCATE Server address
-#define CELL_LOCATE_SERVER_ADDRESS "cell-live1.services.u-blox.com"
+char cellLocateServerUrl[CELL_LOCATE_SERVER_URL_MAXLEN+1]="cell-live1.services.u-blox.com";
 // APN name to set for the network
-#define APN "<network-apn>"
+char aPN[APN_MAXLEN+1]="tsiot";
+// Timeout for Cell Registration in seconds
+int32_t cellRegistrationTimeout = 40; 
+// variable to keep connection attempt time
+uint32_t cellNetConnectStartTime;
+// flag to indicate whether the configuration is done or not 
+bool configurationDone = false;
 
-// Set it to 0 if you dont want to use wifi scan 
-#define USE_WIFI 1
-
-
-// ------------------------- CONFIGURATIONS END ---------------------------------
-
-// Check configuration Parameters
-
-#if NUM_WIFI_ACCESSPOINT < 5
-#error Mininum five access points are required for getting position using CellLocate Wi-Fi
-#endif
-
+// ------------------------- GLOBALS END ---------------------------------
 
 
 /* ------------------------------------------------------------------------------
- * HELPER FUNCTIONS
+ * FUNCTIONS
  * -----------------------------------------------------------------------------*/
 
 
@@ -159,6 +140,15 @@ void printLocation(int32_t latitudeX1e7, int32_t longitudeX1e7)
              fractionLong);
 }
 
+/** \fn static bool continueCellSearch(uDeviceHandle_t deviceHandle)
+ * @brief Indication to stop or continue CellConnect.
+ * @param[in] deviceHandle device handle
+*/
+static bool continueCellSearch(uDeviceHandle_t deviceHandle)
+{
+    return (k_uptime_get() - cellNetConnectStartTime < (cellRegistrationTimeout*1000));
+}
+
 /** \fn int32_t getWifiScanPayload(char *pBuffer, int32_t bufferLength)
  * @brief Get Wi-Fi Access Points 
  * @param[in] pBuffer char array to be filled with APs information
@@ -167,23 +157,16 @@ void printLocation(int32_t latitudeX1e7, int32_t longitudeX1e7)
 */
 int32_t getWifiScanPayload(char *pBuffer, int32_t bufferLength)
 {
-    printk("Preparing to get WiFi Scan Payload");
+    printk("Preparing to get WiFi Scan Payload..\r\n");
     int32_t uartHandle;
     uAtClientHandle_t atClientHandle;
     int count = 0;
 
-    nina15InitPower();
-    printk("NINA-W15 powered on \r\n");
+    memset(pBuffer,0,bufferLength);
     ninaNoraCommEnable();
-    printk("NINA-Nora communication enabled \r\n");
     setUartConfig(NORAuart);
     printk("Nora UART configured \r\n");
-    VERIFY(uPortInit() == 0, "uPortInit failed\n");
-    uAtClientInit();
-    uWifiInit();
-    printk("Wi-Fi client initialized \r\n");
-
-
+    
     // Open a UART with the recommended buffer length
     // on your chosen UART HW block
     uartHandle = uPortUartOpen(2,
@@ -207,13 +190,13 @@ int32_t getWifiScanPayload(char *pBuffer, int32_t bufferLength)
     uAtClientPrintAtSet(atClientHandle, true);
     uAtClientLock(atClientHandle);
     printk("Setting AT client timeout \r\n");
-    uAtClientTimeoutSet(atClientHandle, 2000);
+    uAtClientTimeoutSet(atClientHandle, 5000);
     // Command to perform a Wi-Fi scan operation and outputs Wi-Fi Location fingerprint
     // AT+ULOCWIFIFMT=<numAPs>,<rssiFilter>,<format>
     printk("Requesting Wi-Fi location fingerprint \r\n");
     uAtClientCommandStart(atClientHandle, "AT+ULOCWIFIFMT=");
-    uAtClientWriteInt(atClientHandle, NUM_WIFI_ACCESSPOINT);
-    uAtClientWriteInt(atClientHandle, MIN_WIFI_SIGNALSTRENGTH);
+    uAtClientWriteInt(atClientHandle, numWifiAP);
+    uAtClientWriteInt(atClientHandle, wifiApSignalStrength);
     uAtClientWriteInt(atClientHandle, 0);
     uAtClientCommandStop(atClientHandle);
 
@@ -222,17 +205,13 @@ int32_t getWifiScanPayload(char *pBuffer, int32_t bufferLength)
         count = uAtClientReadString(atClientHandle, pBuffer, bufferLength, false);
     }
     uAtClientResponseStop(atClientHandle);
-
+    uAtClientFlush(atClientHandle);
     uAtClientUnlock(atClientHandle);
 
-    uWifiDeinit();
-    uAtClientDeinit();
-    uPortDeinit();
-
+    uAtClientRemove(atClientHandle);
+    uPortUartClose(uartHandle);
     ninaNoraCommDisable();
-    nina15Disable();
-    printk("NINA-W15 Powered off \r\n");
-    printk("NINA Payload(%d) : %s\n",count, pBuffer);
+    printk("NINA Payload(%d) : %s\r\n",count, pBuffer);
     return count;
 
 }
@@ -243,7 +222,7 @@ int32_t getWifiScanPayload(char *pBuffer, int32_t bufferLength)
  * @param[out] location To be filled when location is calculated
  * @param[in] useWifiPayload A flag that indicates to use WIFI location if set to 1. 
 */
-uint8_t getPosition(char *pBuffer, uLocation_t *location, bool useWifiPayload)
+uint8_t getPosition(char *pBuffer, uLocation_t *location)
 {
     int32_t uartHandle;
     uAtClientHandle_t atClientHandle;
@@ -252,15 +231,11 @@ uint8_t getPosition(char *pBuffer, uLocation_t *location, bool useWifiPayload)
     int32_t numofRetries = 2;
     int32_t errorCode = -1;
     uint8_t locationReceived = U_ERROR_COMMON_UNKNOWN;
+    printk("Turning on SARA-R5..\r\n");
     saraR5InitPower();
-    printk("SARA-R5 Powered on \r\n");
     setUartConfig(SARAuart);
-    VERIFY(uPortInit() == 0, "uPortInit failed\n");
-    uDeviceInit(); 
-    uAtClientInit();
-    uCellInit();
     
-
+    
     // Open a UART with the recommended buffer length
     // on your chosen UART HW block
     uartHandle = uPortUartOpen(2,
@@ -298,14 +273,16 @@ uint8_t getPosition(char *pBuffer, uLocation_t *location, bool useWifiPayload)
     uAtClientCommandStart(atClientHandle, "AT+CMEE=2");
     uAtClientCommandStopReadResponse(atClientHandle);
     uAtClientUnlock(atClientHandle);
+    cellNetConnectStartTime = k_uptime_get();
     for (int i= 0; i< numofRetries &&  errorCode!= 0; i++){
-        errorCode = uCellNetConnect(cellHandle, NULL, APN, NULL, NULL, NULL);
+        errorCode = uCellNetConnect(cellHandle, NULL, aPN, NULL, NULL, continueCellSearch);
         uPortTaskBlock (500);
     }
     if (errorCode == 0) {
         // Configure Cell Locate service
-        if (uCellLocSetServer(cellHandle, CELL_LOCATE_TOKEN, CELL_LOCATE_SERVER_ADDRESS, NULL)==0){ 
-            if (useWifiPayload){
+        if (uCellLocSetServer(cellHandle, cellLocateToken, cellLocateServerUrl, NULL)==0){ 
+            
+            if (pBuffer != NULL){
                 // feed wifi scan info to cellular module
                 uAtClientLock(atClientHandle);
 
@@ -317,6 +294,7 @@ uint8_t getPosition(char *pBuffer, uLocation_t *location, bool useWifiPayload)
                 uAtClientCommandStopReadResponse(atClientHandle);
                 uAtClientUnlock(atClientHandle);
             }
+            
             // Now get location using Cell Locate
             if (uLocationGet(cellHandle, U_LOCATION_TYPE_CLOUD_CELL_LOCATE,
                             NULL, NULL,
@@ -328,17 +306,163 @@ uint8_t getPosition(char *pBuffer, uLocation_t *location, bool useWifiPayload)
         }
     }
     else {
-        printk("Cellular module not able to connect to network.\n");
+        printk("Cellular module not able to connect to network.\r\n");
     }
-    uCellDeinit();
-    uAtClientDeinit();
-    uDeviceDeinit();
-    uPortDeinit();
+    
+    uCellRemove(cellHandle);
+    uAtClientRemove(atClientHandle);
+    uPortUartClose(uartHandle);
     saraR5Disable();
-    printk("SARA-R5 Powered off \r\n");
+    printk("SARA-R5 powered off \r\n");
     return locationReceived;
 }
+/** \fn static int locationWifiHandler(const struct shell *shell, size_t argc, char **argv)
+ * @brief WiFi command handler function to get location using CellLocate service with WiFi
+ * @param[in] shell pointer to shell instance
+ * @param[in] argc count of arugments
+ * @param[in] argv pointer to array of arguments passed. 
+*/
+static int locationWifiHandler(const struct shell *shell, size_t argc, char **argv)
+{
+    if (configurationDone == false){
+        shell_print(shell, "Before requesting location please complete the parameter configurtion using config command\r\n");
+        return 1;
+    }
+    unsigned char buffer[1023];
+    uLocation_t location;
+    int32_t rc = U_ERROR_COMMON_NOT_INITIALISED;
+    if (getWifiScanPayload(buffer, sizeof(buffer)) > 0 )
+    {
+        if (getPosition(buffer, &location) == U_ERROR_COMMON_SUCCESS) {
+            printLocation((int32_t)location.latitudeX1e7, (int32_t)location.longitudeX1e7);
+            rc = U_ERROR_COMMON_SUCCESS;
+        }
+        else {
+            shell_print(shell, "Could not get location.\r\n");
+        }
+    }
+    else {
+        shell_print(shell, "No WiFi AP information available. Please adjust filter conditions according to the environment\r\n");
+    }
+    
+    return 0;
+    
+}
+/** \fn static int locationCellHandler(const struct shell *shell, size_t argc, char **argv)
+ * @brief Cell command handler function to get location using CellLocate service
+ * @param[in] shell pointer to shell instance
+ * @param[in] argc count of arugments
+ * @param[in] argv pointer to array of arguments passed. 
+*/
+static int locationCellHandler(const struct shell *shell, size_t argc, char **argv)
+{
+    if (configurationDone == false){
+        shell_print(shell, "Before requesting location please complete the parameter configurtion using config command\r\n");
+        return 1;
+    }
+    int32_t rc = U_ERROR_COMMON_UNKNOWN;
+    uLocation_t location;
+    if (getPosition(NULL, &location) == U_ERROR_COMMON_SUCCESS) {
+        printLocation((int32_t)location.latitudeX1e7, (int32_t)location.longitudeX1e7);
+        rc = U_ERROR_COMMON_SUCCESS;
+    }
+    else {
+        printk("Could not get location.\r\n");
+    }
+    return 0;
+}
+/** \fn static int getConfigParameters(const struct shell *shell, size_t argc, char **argv)
+ * @brief Function to read configuration parameters
+ * @param[in] shell pointer to shell instance
+ * @param[in] argc count of arugments
+ * @param[in] argv pointer to array of arguments passed. 
+*/
+static int getConfigParameters(const struct shell *shell, size_t argc, char **argv)
+{
+    shell_print(shell, "CellLocateServerURL: %s, Token: %s, APN: %s, CellRegistrationTimeout: %d, NumWifiAp: %d, WifiApSignalStrength: %d\r\n",\
+    cellLocateServerUrl, \
+    cellLocateToken,\
+    aPN,\
+    cellRegistrationTimeout, \
+    numWifiAP,\
+    wifiApSignalStrength);
+    
+    return 0;
 
+}
+
+/** \fn static int setConfigParameters(const struct shell *shell, size_t argc, char **argv)
+ * @brief Function to set configuration parameters
+ * @param[in] shell pointer to shell instance
+ * @param[in] argc count of arugments
+ * @param[in] argv pointer to array of arguments passed. 
+*/
+static int setConfigParameters(const struct shell *shell, size_t argc, char **argv)
+{
+    if (argc == 7){
+        bool invalid = false;
+        uint32_t integerParameter;
+        // checks parameters validity
+        if( strlen( argv[1] ) >= CELL_LOCATE_SERVER_URL_MAXLEN ){
+            shell_error( shell," CellLocateServerURL length cannot be greater than %d\r\n", CELL_LOCATE_SERVER_URL_MAXLEN );    
+            invalid = true;
+        }
+        if( strlen( argv[2] )  >= CELL_LOCATE_TOKEN_MAXLEN ){
+            shell_error( shell,"Token length cannot be greater than %d\r\n", CELL_LOCATE_TOKEN_MAXLEN );    
+            invalid = true;
+        }
+        if( strlen( argv[3] ) >= APN_MAXLEN ){
+            shell_error( shell,"APN length cannot be greater than %d\r\n", APN_MAXLEN );    
+            invalid = true;
+        }
+        integerParameter = atoi(argv[4]);
+        if(integerParameter < 0 && integerParameter >= 300 ){
+            shell_error( shell,"CellRegistrationTimeout should be in between 1-300 seconds\r\n");    
+            invalid = true;
+        }
+        integerParameter = atoi(argv[5]);
+        if(integerParameter < 5 && integerParameter > 15 ){
+            shell_error( shell,"NumWifiAP should be in between 5-15\r\n");    
+            invalid = true;
+        }
+        integerParameter = atoi(argv[6]);
+        if(integerParameter < -100 && integerParameter > 0 ){
+            shell_error( shell,"WifiApSignalStrength should be in between -100-0\r\n");    
+            invalid = true;
+        }
+        if( invalid ){
+            return 1;
+        }
+
+        strcpy(cellLocateServerUrl, argv[1]);
+        strcpy(cellLocateToken, argv[2]);
+        strcpy(aPN, argv[3]);
+        cellRegistrationTimeout = atoi(argv[4]);
+        numWifiAP = atoi(argv[5]);
+        wifiApSignalStrength = atoi(argv[6]);
+        configurationDone = true;
+        getConfigParameters(shell, argc, argv);
+
+    }
+    else {
+        shell_print(shell, "Missing params. Please enter all parameters: <CellLocateServerURL> <Token> <APN> <CellRegistrationTimeout(s)> <NumWifiAp> <WifiApSignalStrength(dbm)>\r\n");
+    }
+    return 0;
+}
+SHELL_STATIC_SUBCMD_SET_CREATE(location_type,
+        SHELL_CMD(wifi, NULL, "Use wifi access points information to get location",
+                                               locationWifiHandler),
+        SHELL_CMD(cell,   NULL, "Use cellular scan information to get location", locationCellHandler),
+        SHELL_SUBCMD_SET_END
+);
+SHELL_STATIC_SUBCMD_SET_CREATE(config_sub_cmd,
+        SHELL_CMD(get, NULL, "read configuration parameters",
+                                               getConfigParameters),
+        SHELL_CMD(set,   NULL, "set configuration parameters: <CellLocateServerURL> <Token> <APN> <CellRegistrationTimeout(s)> <NumWifiAp> <WifiApSignalStrength(dbm)>", setConfigParameters),
+        SHELL_SUBCMD_SET_END
+);
+SHELL_CMD_REGISTER(location, &location_type, "location command", NULL);
+SHELL_CMD_REGISTER(config, &config_sub_cmd, "Configuration of parameters", NULL);
 /** \fn void main(void)
  * @brief Main function of the code 
  */
@@ -347,22 +471,14 @@ uint8_t getPosition(char *pBuffer, uLocation_t *location, bool useWifiPayload)
  * -------------------------------------------------------------- */
 
 void main(void)
-{
-    unsigned char buffer[1023]; // MAX string length for AT command 1023
-    uLocation_t location;
-
-    if(USE_WIFI){
-        if (getWifiScanPayload(buffer, sizeof(buffer)) == 0 ){
-            printk("No WiFi AP information availble. Please adjust filter conditions according to the environment\n");
-            return;
-        }
-    }
+{   
+    nina15InitPower();
+    printk("NINA-W15 powered on \r\n");
+    VERIFY(uPortInit() == 0, "uPortInit failed\r\n");
+    uAtClientInit();
+    uDeviceInit(); 
+    uCellInit();
     
-    if (getPosition(buffer, &location, USE_WIFI) == U_ERROR_COMMON_SUCCESS) {
-        printLocation(location.latitudeX1e7, location.longitudeX1e7);
-    }
-    else {
-        printk("Could not get location.\n");
-    }
+    printk("Enter command:\r\n");
 	
 }

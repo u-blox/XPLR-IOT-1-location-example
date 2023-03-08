@@ -10,6 +10,7 @@ The example uses ubxlib to implement most of its functionalities and it is recom
 
 Any future updates of this application will be uploaded here.
 
+
 ## Prerequisite
 
 To access to CloudLocate service you need to create a CloudLocate Thing that is the logical representation of the device in the u-blox Thingstream service delivery platform; the Cloudocate Thing provides the MQTT credentials and MQTT topics to be used by the device for service authentication and communication with the cloud over MQTT protocol. For step by step process, refer to **Configure the Thingstream platform** section of the guide given below:
@@ -17,30 +18,87 @@ https://developer.thingstream.io/guides/location-services/cloudlocate-getting-st
 
 The main steps to use the service are:
 1. Setup the CloudLocate Thing, get the credentials and MQTT topics
-2. Configure the MQTT client in the device with the above settings (in this example it is used the client of the SARA-R5 Cellular modem)
+2. Configure the MQTT client in the device with the above settings (in this example, it used the client of the SARA-R5 Cellular modem)
 3. Generate the raw measurement from GNSS
 4. Publish the raw measurement in the MQTT topic and get the estimated postion in the response MQTT topic
 
 
 ## Setup
 
-1. Set your CloudLocate location thing credentials and APN in the code, save it and build. You can also tweek the configuration parameters in the code. For the details, see [Description](#description).   
+1. Clone the XPLR-IOT-1-location-example.
 
-2. Building the code will generate a binary file named as **app_update.bin** at the following location:
+2. Go to location *XPLR1-IOT-location-example/image_flashing*. The folder with contain a pre-build binary named **cloudlocate-example.bin** which can be directly flashed to the device. 
+
+3. If some tweaks are done in the firmware, build the code again.
+
+4. Building the code will generate a binary file named as **app_update.bin** at the following location:
 
 *XPLR1-IOT-location-example/cloudlocate-example/build/zephyr*
 
-3. Copy the **app_update.bin** file and paste it at the given location: 
+5. Rename the **app_update.bin** file to **cloudlocate-example.bin** and paste it at the given location: 
 
 *XPLR1-IOT-location-example/image_flashing*
 
-4. Go to *XPLR1-IOT-location-example/image_flashing* folder. 
+6. Go to *XPLR1-IOT-location-example/image_flashing* folder. 
 
-5. Connect your XPLR-IOT-1 kit to your system and determine the COM port number for NORA-B1 on Interface 0 of the USB-UART interface. 
+7. Connect your XPLR-IOT-1 kit to your system and determine the COM port number for NORA-B1 on Interface 0 of the USB-UART interface. 
 
-6. Run *Update_XPLR-IOT-1-Location.bat* file and a pop-up window will appear input your comport as following: 
+8. Run *Update_XPLR-IOT-1-Location.bat* file and a pop-up window will appear input your comport as following: 
 
 ![Bat file pop-up](../imgs/bat.PNG?raw=true)
+
+9. Input your comport, your binary file name and press enter. The process will start flashing **cloudlocate-example.bin** image file into your kit.
+
+10. More details about the XPLR-IOT-1 bootloader can be found in the following link: [XPLR-IOT-1](https://github.com/u-blox/XPLR-IOT-1-software/tree/main/tools_and_compiled_images)
+
+
+## Configuration for CloudLocate 
+
+To get the location from the XPLR-IOT-1 kit using CloudLocate service, the device is needed to be configured accordingly. To configure the device, the steps are given as following
+
+1. Connect the device to the system using COM port for NORA-B1 on Interface 0 of the USB-UART interface.
+
+2. To configure the device, "config set" command is used. The configuration has to be set everytime the device is turned on. The command format is as following:
+
+    **config set 'MqttUsername' 'MqttPassword' 'DeviceId' 'APN' 'CellRegistrationTimeout' 'TimeToWaitForFirstMessage' 'CompactMessageTimeout' 'FallbackNavpvtStatus' 'FallbackTimeout'**
+    
+	A sample command and the response for config set is given below:
+    
+	```sh
+    $ config set FBMYLYXKG1YUVOUTCNPH 0QaHlOEIGJkRMTZOvR+/iJu0BOu+gMpyYcnd+DXU device:5bb1dcc4-2338-4cef-959e-a570c53f4f17 tsiot 60 60 300 0 30
+    > MqttUsername: FBMYLYXKG1YUVOUTCNPH, MqttPassword: 0QaHlOEIGJkRMTZOvR+/iJu0BOu+gMpyYcnd+DXU, DeviceId: device:5bb1dcc4-2338-4cef-959e-a570c53f4f17, APN: tsiot, CellRegistrationTimeout: 60, TimeToWaitForFirstMessage: 60, CompactMessageTimeout: 300, FallbackNavpvtStatus: 0, FallbackTimeout: 30 
+    ```
+
+3. To view the configuration set on the device, "config get" command is used.
+The command and the response for config get is given below:
+    
+	```sh
+    $ config get
+    > MqttUsername: FBMYLYXKG1YUVOUTCNPH, MqttPassword: 0QaHlOEIGJkRMTZOvR+/iJu0BOu+gMpyYcnd+DXU, DeviceId: device:5bb1dcc4-2338-4cef-959e-a570c53f4f17, APN: tsiot, CellRegistrationTimeout: 60, TimeToWaitForFirstMessage: 60, CompactMessageTimeout: 300, FallbackNavpvtStatus: 0, FallbackTimeout: 30 
+	```
+
+4. To get help with device configurations, "config help" command is used.
+The command and the response for config help is given below: 
+    
+	```sh
+    $ config help
+    > config - Configuration of parameters
+    > Subcommands:
+    >  get  :read configuration parameters
+    >  set  :set configuration parameters: <MqttUsername> <MqttPassword> <DeviceId> <APN> <CellRegistrationTimeout> 
+    >  				   <TimeToWaitForFirstMessage> <CompactMessageTimeout> <FallbackNavpvtStatus> <FallbackTimeout>      
+    ```
+
+## Location using CellLocate Service
+
+To get the location from the XPLR-IOT-1 kit using CloudLocate service, a valid configuration setting is required as a pre-requisite for this command.
+The command to get location using cloudlocate is given below:
+
+
+    $ location MsgType
+	
+where MsgType can be compact messages like **meas20**, **meas50** or a complete **measx** message
+
 
 ## Description
 
@@ -50,68 +108,35 @@ These raw measurements can either be compact messages like:
 - UBX-RXM-MEAS50 (50 bytes)
 
 or UBX-RXM-MEASX message (>170 bytes) based on user's requirements. 
-To send these messages to the CloudLocate service, MQTT protocol is used. 
-
-For MQTT based communication with the cloud, the example uses SARA-R5 MQTT client. The MQTT request and response topics for a location thing can be obtained from Thingstream portal. 
-
+To send these messages to the CloudLocate service, MQTT protocol is used. For MQTT based communication with the cloud, the example uses SARA-R5 MQTT client. The MQTT request and response topics for a location thing can be obtained from Thingstream portal. 
 The user is required to set some configurable parameters as per the requirements and the example will bring back the location based on those parameters. The configurable parameters are: 
 
-1. **MSG_TYPE**:
-The user needs to set the message type for which the raw measurements are required.  
+1. **MqttUsername**
+It is the username of the CloudLocate Thing created on the Thingstream portal and is required for the service authentication. The maximum length allowed for username is 25 bytes.
 
-`const messageType_t MSG_TYPE = <your_desired_message_type>;`
+2. **MqttPassword**
+It is the password of the Cl0udLocate Thing created on the Thingstream portal and is required for the service authentication. The maximum length of password is 50 bytes. 
 
-A list of message types accepted by the code are given below:  
+3. **DeviceId**
+It is the device ID of the CloudLocate Thing created on the Thingstream portal. This field is required to subscribe to the unique MQTT topic for your device. The maximum allowed length is 50 bytes.
 
-* MEASX
-* MEAS50
-* MEAS20
-* NAVPVT
+4. **APN**:
+This field refers to *Access Point Name* and must be filled with the APN of the network service provided whose SIM card is being used in the device. The maximum allowed length is 50 bytes.
 
-2. **NUM_OF_SECONDS_TO_WAIT_FOR_FIRST_MESSAGE**: 
-It is the minimum waiting time (in seconds) before getting the first measurement from the GNSS receiver. The GNSS automatically sends in output the selected message once the internal criterias are met.  If this timer value is set to 0, this very first valid message will be picked, otherways the sample code waits more seconds until the NUM_OF_SECONDS_TO_WAIT_FOR_FIRST_MESSAGE is expired. Usually the first valid message is sent out by the GNSS approximately after 3-4 seconds, but you might want to set the timer to 8 seconds, for example, to get more stable GNSS signals    
+5. **CellRegistrationTimeout**:
+The time for which the device waits to establish a successful connection with the network. The range of allowed timeout is 1sec to 300 sec.
 
-`const int32_t NUM_OF_SECONDS_TO_WAIT_FOR_FIRST_MESSAGE = <your_wait_time_sec>`
+6. **TimeToWaitForFirstMessage**: 
+It is the minimum waiting time (in seconds) before getting the first measurement from the GNSS receiver. The GNSS automatically sends in output the selected message once the internal criterias are met.  If this timer value is set to 0, this very first valid message will be picked, otherways the sample code waits more seconds until the TimeToWaitForFirstMessage is expired. Usually the first valid message is sent out by the GNSS approximately after 3-4 seconds, but you might want to set the timer to 8 seconds, for example, to get more stable GNSS signals. The range of allowed waiting time is 0 to 60 sec.    
 
-3. **COMPACT_MSG_TIMEOUT_IN_SECS**:
-It is the maximum waiting time to get a valid message from the receiver. If the receiver fails to provide a valid message in the given timeout, the measurement is aborted (if fallback is disabled). The default value is set to 20 sec. This timer shall be grater than the previous one.
+7. **CompactMessageTimeout**:
+It is the maximum waiting time to get a valid message from the receiver. If the receiver fails to provide a valid message in the given timeout, the measurement is aborted (if fallback is disabled). This timer shall be grater than the previous one. The range of allowed timeout is 1sec to 300 sec.
 
-`const int32_t COMPACT_MSG_TIMEOUT_IN_SECS = <your_timeout_sec>`
-
-4. **FALLBACK_NAVPVT_ENABLED**:
+8. **FallbackNavpvtStatus**:
 This is a flag to enable a fallback option. In case the receiver fails to provide a valid compact message within the given timeout, a UBX-NAV-PVT message is used to get a location based on it. The UBX-NAV-PVT contains the position estimated locally by the GNSS receiver. To enable NAVPVT message, the flag must be set to true.  
 
-`bool FALLBACK_NAVPVT_ENABLED = <true/false>;`
-
-5. **FALLBACK_TIMEOUT_IN_SECS**
-It is the maximum waiting time to get a measurement based on UBX-NAV-PVT message. If it times out, the fallback will be aborted. 
-
-`const int32_t FALLBACK_TIMEOUT_IN_SECS = <your_fallback_timeout>;`
-
-6. **APN**:
-This field refers to *Access Point Name* and must be filled with the APN of the network service provided whose SIM card is being used in the device.
-
-`#define APN "<your_APN>"`
-
-7. **CLIENT_ID**
-It is the device ID of the CludLocate Thing created on the Thingstream portal. This field is required to subscribe to the unique MQTT topic for your device. 
-
-`#define CLIENT_ID "<your_device_ID>"`
-
-8. **USERNAME**
-It is the username of the CludLocate Thing created on the Thingstream portal and is required for the service authentication.
-
-`#define USERNAME "<your_device_username>"`
-
-9. **PASSWORD**
-It is the password of the CludLocate Thing created on the Thingstream portal and is required for the service authentication.
-
-`#define PASSWORD "<your_device_password>"`
-
-10. **SUB_TOPIC**
-This is MQTT topic on which device has to subscribe to receive the response and location from the cloud. The format of the topic is given below: 
-
-`#define SUB_TOPIC "CloudLocate/{your_deviceID}/GNSS/response"`
+9. **FallbackTimeout**
+It is the maximum waiting time to get a measurement based on UBX-NAV-PVT message. If it times out, the fallback will be aborted. The range of allowed timeout is 1sec to 60 sec.
 
 
 There are some use cases in which the device does not have connectivity all the time. Even in this case you can use CloudLocate service by storing the time and date of the snapshot and send it in the following format:
@@ -124,6 +149,7 @@ There are some use cases in which the device does not have connectivity all the 
 Note: The current example does not support delayed message. The code needs to be updated in order to cater this scenario. For more information regarding CloudLocate service, refer to [CloudLocate getting started](https://developer.thingstream.io/guides/location-services/cloudlocate-getting-started) 
 
 The user can also get the position in the cloud. For details, refer to next section.  
+
 
 ## Get the location on your cloud application 
 
