@@ -45,19 +45,35 @@
 #include <shell/shell_uart.h> 
 
 /* ----------------------------------------------------------------
- * ERROR CHECKING
+ * COMPILE-TIME MACROS
  * -------------------------------------------------------------- */
+
+//Flags to Enable/Disable Messages 
+#define U_GNSS_CFG_ENABLE_MSG 1
+#define U_GNSS_CFG_DISABLE_MSG 0
+
+// Thingstream Broker URL
+#define BROKER_NAME "mqtt.thingstream.io"
+
+// Topic to publish GNSS measurements for CloudLocate
+#define PUB_TOPIC "CloudLocate/GNSS/request"
+
+// Input Parameters' Max Lengths
+#define APN_MAXLEN 50
+#define CLIENT_ID_MAXLEN 50
+#define USERNAME_MAXLEN 25
+#define PASSWORD_MAXLEN 50
+#define SUB_TOPIC_MAXLEN 100
 
 #define VERIFY(cond, fail_msg) \
     if (!(cond)) {\
         failed(fail_msg); \
     }
 
-void failed(const char *msg)
-{
-    uPortLog(msg);
-    while(1);
-}
+
+/* ----------------------------------------------------------------
+ * TYPE DEFINITIONS
+ * -------------------------------------------------------------- */
 
 /*! \enum messageType_t
  * @brief Enum containing all supported message types
@@ -81,31 +97,77 @@ typedef struct {
 } measCfg_t; 
 
 
-/*! 
- * @brief A struct array containing messageIds and KeyIds for all meas messages
- * Reference: U-blox M10 Spg 5.10 Document (https://www.u-blox.com/docs/UBX-21035062)
- */
-measCfg_t msgInfo[] =  {
-    { 0x0214, U_GNSS_CFG_VAL_KEY_ID_MSGOUT_UBX_RXM_MEASX_UART1_U1},
-    { 0x0286, U_GNSS_CFG_VAL_KEY_ID_MSGOUT_UBX_RXM_MEAS50_UART1_U1},
-    { 0x0284, U_GNSS_CFG_VAL_KEY_ID_MSGOUT_UBX_RXM_MEAS20_UART1_U1},
-    { 0x0107, U_GNSS_CFG_VAL_KEY_ID_MSGOUT_UBX_NAV_PVT_UART1_U1}
-};
+/* ------------------------------------------------------------------------------
+ * CALLBACK DECLERATIONS
+ * -----------------------------------------------------------------------------*/
 
-// ------------------------- GLOBALS START ---------------------------------
+/** \fn static void messageIndicationCallback(int32_t numUnread, void *pParam)
+ * @brief Indication for unread message indications.
+ * @param[in] numUnread count of unread characters
+ * @param[in] pParam pointer to an unread incoming parameter
+*/
+static void messageIndicationCallback(int32_t, void *);
 
-// Thingstream Broker URL
-#define BROKER_NAME "mqtt.thingstream.io"
+/** \fn static bool continueCellSearchCallback(uDeviceHandle_t deviceHandle)
+ * @brief Indication to stop or continue CellConnect.
+ * @param[in] deviceHandle device handle
+*/
+static bool continueCellSearchCallback(uDeviceHandle_t deviceHandle);
 
-// Topic to publish GNSS measurements for CloudLocate
-#define PUB_TOPIC "CloudLocate/GNSS/request"
 
-// Input Parameters' Max Lengths
-#define APN_MAXLEN 50
-#define CLIENT_ID_MAXLEN 50
-#define USERNAME_MAXLEN 25
-#define PASSWORD_MAXLEN 50
-#define SUB_TOPIC_MAXLEN 100
+/* ------------------------------------------------------------------------------
+ * HELPER FUNCTION DECLERATIONS
+ * -----------------------------------------------------------------------------*/
+
+/** \fn void failed(const char *msg)
+ * @brief Function to log failed messages.
+ * @param[in] msg incoming string - const char array
+*/
+void failed(const char *msg);
+
+/** \fn void printUBXMessageinHex(char *pBuffer, int32_t bufferLenght)
+ * @brief Function to print a string of defined length.
+ * @param[in] pBuffer incoming string - char array
+ * @param[in] bufferLenght length of the string to be printed
+*/
+void printUBXMessageinHex(char *pBuffer, int32_t bufferLenght);
+
+/** \fn int32_t getMeasMessageFromGNSS(char *pBuffer, int32_t bufferLength, messageType_t msgType)
+ * @brief Getting meas message from GNSS receiver
+ * @param[in] pBuffer buffer to be filled with meas message
+ * @param[in] bufferLength length of the buffer
+ * @param[in] msgType type of compact message
+*/
+int32_t getMeasMessageFromGNSS(char *pBuffer, int32_t bufferLength, messageType_t msgType);
+
+/** \fn int32_t getLocationFromCloudLocate(const struct shell *shell, size_t argc, char **argv)
+ * @brief Function to request position from CloudLocate service
+ * @param[in] shell pointer to shell instance
+ * @param[in] argc count of arguments
+ * @param[in] argv pointer to array of arguments passed.
+*/
+int32_t getLocationFromCloudLocate(const struct shell *shell, size_t argc, char **argv);
+
+/** \fn static int getConfigParameters(const struct shell *shell, size_t argc, char **argv)
+ * @brief Function to read configuration parameters
+ * @param[in] shell pointer to shell instance
+ * @param[in] argc count of arguments
+ * @param[in] argv pointer to array of arguments passed. 
+*/
+static int getConfigParameters(const struct shell *shell, size_t argc, char **argv);
+
+/** \fn static int setConfigParameters(const struct shell *shell, size_t argc, char **argv)
+ * @brief Function to set configuration parameters
+ * @param[in] shell pointer to shell instance
+ * @param[in] argc count of arugments
+ * @param[in] argv pointer to array of arguments passed. 
+*/
+static int setConfigParameters(const struct shell *shell, size_t argc, char **argv);
+
+
+/* ------------------------------------------------------------------------------
+ * GLOBALS
+ * -----------------------------------------------------------------------------*/
 
 // MQTT Credentials
 char username[USERNAME_MAXLEN+1];
@@ -127,41 +189,21 @@ bool isCellConnectAborted = false;
 // flag to indicate whether the configuration is done or not 
 bool configurationDone = false;
 
-// ------------------------- GLOBALS END ---------------------------------
-
-
-/* ----------------------------------------------------------------
- * COMPILE-TIME MACROS
- * -------------------------------------------------------------- */
-
-//Flags to Enable/Disable Messages 
-#define U_GNSS_CFG_ENABLE_MSG 1
-
-#define U_GNSS_CFG_DISABLE_MSG 0
-
-/* ------------------------------------------------------------------------------
- * STATIC FUNCTION DECLERATION
- * -----------------------------------------------------------------------------*/
-
-/** Callback for unread message indications.
-*/
-static void messageIndicationCallback(int32_t, void *);
-
-/** Callback to check if CellConnect should continue or not.
-*/
-static bool continueCellSearch(uDeviceHandle_t deviceHandle);
-
+/*! 
+ * @brief A struct array containing messageIds and KeyIds for all meas messages
+ * Reference: U-blox M10 Spg 5.10 Document (https://www.u-blox.com/docs/UBX-21035062)
+ */
+measCfg_t msgInfo[] =  {
+    { 0x0214, U_GNSS_CFG_VAL_KEY_ID_MSGOUT_UBX_RXM_MEASX_UART1_U1},
+    { 0x0286, U_GNSS_CFG_VAL_KEY_ID_MSGOUT_UBX_RXM_MEAS50_UART1_U1},
+    { 0x0284, U_GNSS_CFG_VAL_KEY_ID_MSGOUT_UBX_RXM_MEAS20_UART1_U1},
+    { 0x0107, U_GNSS_CFG_VAL_KEY_ID_MSGOUT_UBX_NAV_PVT_UART1_U1}
+};
 
 
 /* ------------------------------------------------------------------------------
- * STATIC FUNCTION IMPLEMENTATION
+ * CALLBACK IMPLEMENTATION
  * -----------------------------------------------------------------------------*/
-
-/** \fn static void messageIndicationCallback(int32_t numUnread, void *pParam)
- * @brief Indication for unread message indications.
- * @param[in] numUnread count of unread characters
- * @param[in] pParam pointer to an unread incoming parameter
-*/
 
 static void messageIndicationCallback(int32_t numUnread, void *pParam)
 {
@@ -169,11 +211,8 @@ static void messageIndicationCallback(int32_t numUnread, void *pParam)
     printk("The broker says there are %d message(s) unread.\n", numUnread);
     *pMessagesAvailable = true;
 }
-/** \fn static bool continueCellSearch(uDeviceHandle_t deviceHandle)
- * @brief Indication to stop or continue CellConnect.
- * @param[in] deviceHandle device handle
-*/
-static bool continueCellSearch(uDeviceHandle_t deviceHandle)
+
+static bool continueCellSearchCallback(uDeviceHandle_t deviceHandle)
 {
     bool shouldCellSearchContinue = (uPortGetTickTimeMs() - cellSearchstartTimeMs < (cellRegistrationTimeout*1000));
 	if (!shouldCellSearchContinue){
@@ -183,15 +222,15 @@ static bool continueCellSearch(uDeviceHandle_t deviceHandle)
 }
 
 /* ------------------------------------------------------------------------------
- * HELPER FUNCTIONS
+ * HELPER FUNCTION IMPLEMENTATION
  * -----------------------------------------------------------------------------*/
 
+void failed(const char *msg)
+{
+    uPortLog(msg);
+    while(1);
+}
 
-/** \fn void printUBXMessageinHex(char *pBuffer, int32_t bufferLenght)
- * @brief Function to print a string of defined length.
- * @param[in] pBuffer incoming string - char array
- * @param[in] bufferLenght length of the string to be printed
-*/
 void printUBXMessageinHex(char *pBuffer, int32_t bufferLenght)
 {
     for(int i=0; i<bufferLenght; i++)
@@ -201,12 +240,6 @@ void printUBXMessageinHex(char *pBuffer, int32_t bufferLenght)
     printk("\n");
 }
 
-/** \fn int32_t getMeasMessageFromGNSS(char *pBuffer, int32_t bufferLength, messageType_t msgType)
- * @brief Getting meas message from GNSS receiver
- * @param[in] pBuffer buffer to be filled with meas message
- * @param[in] bufferLength length of the buffer
- * @param[in] msgType type of compact message
-*/
 int32_t getMeasMessageFromGNSS(char *pBuffer, int32_t bufferLength, messageType_t msgType)
 {
     int32_t uartHandle;
@@ -255,6 +288,8 @@ int32_t getMeasMessageFromGNSS(char *pBuffer, int32_t bufferLength, messageType_
                 messageId.type = U_GNSS_PROTOCOL_UBX;
                 messageId.id.ubx = msgInfo[msgType].messageId; 
                 printk("Waiting for compact message. Timer values TimeToWaitForFirstMessage: %d, CompactMessageTimeout: %d\r\n", numOfSecondsToWaitForFirstMessage,compactMsgTimeoutInSecs);
+                
+                // Waiting for compact message within the given timer values
                 while(!validMessage && ((uPortGetTickTimeMs() - startTimeMs) < (compactMsgTimeoutInSecs*1000))  ) //timer is expired
                 {
                     length = uGnssMsgReceive(gnssDeviceHandle, &messageId, &pBuffer, bufferLength, compactMsgTimeoutInSecs*1000, NULL);
@@ -288,7 +323,8 @@ int32_t getMeasMessageFromGNSS(char *pBuffer, int32_t bufferLength, messageType_
                     uGnssCfgValSet(gnssDeviceHandle, msgInfo[(messageType_t)NAVPVT].keyId, U_GNSS_CFG_ENABLE_MSG, U_GNSS_CFG_VAL_TRANSACTION_NONE,U_GNSS_CFG_VAL_LAYER_RAM);
                     
                     messageId.id.ubx = msgInfo[(messageType_t)NAVPVT].messageId;
-
+                    
+                    //Waiting for a valid NAVPVT message within the given fallback timeout
                     while(!validMessage && ((uPortGetTickTimeMs() - startTimeMs) < (fallbackTimeoutInSecs*1000))){
                             length = uGnssMsgReceive(gnssDeviceHandle, &messageId, &pBuffer, bufferLength, fallbackTimeoutInSecs*1000, NULL);
                             if (length > 0 ){
@@ -325,13 +361,6 @@ int32_t getMeasMessageFromGNSS(char *pBuffer, int32_t bufferLength, messageType_
 
 }
 
-
-/** \fn int32_t getLocationFromCloudLocate(const struct shell *shell, size_t argc, char **argv)
- * @brief Function to request position from CloudLocate service
- * @param[in] shell pointer to shell instance
- * @param[in] argc count of arguments
- * @param[in] argv pointer to array of arguments passed.
-*/
 int32_t getLocationFromCloudLocate(const struct shell *shell, size_t argc, char **argv){
     
     if (configurationDone == false){
@@ -416,9 +445,10 @@ int32_t getLocationFromCloudLocate(const struct shell *shell, size_t argc, char 
     printk("Bringing up the network...\n");
 	cellSearchstartTimeMs = uPortGetTickTimeMs();
     for (int i= 0; i< numofRetries && errorCode!= 0; i++){
-        errorCode = uCellNetConnect(devHandle, NULL, APN, NULL, NULL, continueCellSearch);
+        errorCode = uCellNetConnect(devHandle, NULL, APN, NULL, NULL, continueCellSearchCallback);
         uPortTaskBlock (500);
     }
+    //Refers to cellRegistrationTimeout
 	if (isCellConnectAborted)
 	{
 		printk("Network registration aborted because it took more than cellRegistrationTimeout(s): %d. Please check if you have good network coverage \r\n", cellRegistrationTimeout );
@@ -500,15 +530,9 @@ int32_t getLocationFromCloudLocate(const struct shell *shell, size_t argc, char 
     return 0;
 }
 
-/** \fn static int getConfigParameters(const struct shell *shell, size_t argc, char **argv)
- * @brief Function to read configuration parameters
- * @param[in] shell pointer to shell instance
- * @param[in] argc count of arguments
- * @param[in] argv pointer to array of arguments passed. 
-*/
 static int getConfigParameters(const struct shell *shell, size_t argc, char **argv)
 {
-    shell_print(shell, "MqttUsername: %s, MqttPassword: %s, DeviceId: %s, APN: %s, CellRegistrationTimeout: %d, TimeToWaitForFirstMessage: %d, CompactMessageTimeout: %d, FallbackNavpvtStatus: %d, FallbackTimeout: %d \r\n",\
+    shell_print(shell, "MqttUsername: %s,\r\nMqttPassword: %s,\r\nDeviceId: %s,\r\nAPN: %s,\r\nCellRegistrationTimeout: %d,\r\nTimeToWaitForFirstMessage: %d,\r\nCompactMessageTimeout: %d,\r\nFallbackNavpvtStatus: %d,\r\nFallbackTimeout: %d \r\n",\
     username, \
     password,\
     clientId,\
@@ -523,12 +547,6 @@ static int getConfigParameters(const struct shell *shell, size_t argc, char **ar
 
 }
 
-/** \fn static int setConfigParameters(const struct shell *shell, size_t argc, char **argv)
- * @brief Function to set configuration parameters
- * @param[in] shell pointer to shell instance
- * @param[in] argc count of arugments
- * @param[in] argv pointer to array of arguments passed. 
-*/
 static int setConfigParameters(const struct shell *shell, size_t argc, char **argv)
 {
     if (argc == 10){
@@ -599,17 +617,31 @@ static int setConfigParameters(const struct shell *shell, size_t argc, char **ar
     return 0;
 }
 
+
+/* ------------------------------------------------------------------------------
+ * SHELL COMMANDS
+ * 1- config
+ * 	1a- config set <MqttUsername> <MqttPassword> <DeviceId> <APN> <CellRegistrationTimeout> <TimeToWaitForFirstMessage> <CompactMessageTimeout> <FallbackNavpvtStatus> <FallbackTimeout>
+ * 	1b- config get
+ * 2- location MsgType 
+ * MsgType refers to meas20, meas50 or measx 
+ * -----------------------------------------------------------------------------*/
+
+//2nd Level of options - Config Subcommands
 SHELL_STATIC_SUBCMD_SET_CREATE(config_sub_cmd,
+        //Command to get configuration parameters configured using set command
         SHELL_CMD(get, NULL, "read configuration parameters",
                                                getConfigParameters),
+        //Command to set configuration parameters
         SHELL_CMD(set,   NULL, "set configuration parameters: <MqttUsername> <MqttPassword> <DeviceId> <APN> <CellRegistrationTimeout(s)> <TimeToWaitForFirstMessage(s)> <CompactMessageTimeout(s)> <FallbackNavpvtStatus> <FallbackTimeout(s)>", setConfigParameters),
         SHELL_SUBCMD_SET_END
 );
+// Command to get the location based on the configured parameters
 SHELL_CMD_REGISTER(location, NULL, "Get location from CloudLocate using measx/meas20/meas50", getLocationFromCloudLocate);
+// 1st level of options - Configuration of parameters
 SHELL_CMD_REGISTER(config, &config_sub_cmd, "Configuration of parameters", NULL);
-/** \fn void main(void)
- * @brief Main function of the code 
- */
+
+
 /* ----------------------------------------------------------------
  * MAIN FUNCTION
  * -------------------------------------------------------------- */
@@ -627,6 +659,5 @@ void main(void)
     saraR5InitPower();
     printk("SARA-R5 Powered on \r\n");
     setUartConfig(SARAuart);
-
-    
+    printk("Enter your required shell commands. Type help for further details");  
 }

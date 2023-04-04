@@ -40,30 +40,114 @@
 
 
 /* ----------------------------------------------------------------
- * ERROR CHECKING
+ * COMPILE-TIME MACROS
  * -------------------------------------------------------------- */
 
+#define CELL_LOCATE_TOKEN_MAXLEN   25
+#define CELL_LOCATE_SERVER_URL_MAXLEN  100
+#define APN_MAXLEN 50
 #define U_WIFI_UART_BUFFER_LENGTH_BYTES 600
-
 #define VERIFY(cond, fail_msg) \
     if (!(cond)) {\
         failed(fail_msg); \
     }
 
-void failed(const char *msg)
-{
-    uPortLog(msg);
-    while(1);
-}
+/* ------------------------------------------------------------------------------
+ * CALLBACK DECLERATIONS
+ * -----------------------------------------------------------------------------*/
+
+/** \fn static bool continueCellSearchCallback(uDeviceHandle_t deviceHandle)
+ * @brief Indication to stop or continue CellConnect.
+ * @param[in] deviceHandle device handle
+*/
+static bool continueCellSearchCallback(uDeviceHandle_t deviceHandle);
 
 
-// ------------------------- GLOBALS START ---------------------------------
+/* ------------------------------------------------------------------------------
+ * HELPER FUNCTION DECLERATIONS
+ * -----------------------------------------------------------------------------*/
+
+/** \fn void failed(const char *msg)
+ * @brief Function to log failed messages.
+ * @param[in] msg incoming string - const char array
+*/
+void failed(const char *msg);
+
+/** \fn char latLongToBits(int32_t thingX1e7, int32_t *pWhole, int32_t *pFraction)
+ * @brief Convert a lat/long into a whole number and a bit-after-the-decimal-point that can be printed by a version of printf() 
+ * that does not support floating point operations, returning the prefix (either "+" or "-").
+ * The result should be printed with printf() format specifiers %c%d.%07d, e.g. something like:
+ * int32_t whole;
+ * int32_t fraction;
+ * printf("%c%d.%07d/%c%d.%07d", latLongToBits(latitudeX1e7, &whole, &fraction),
+ *                               whole, fraction,
+ *                               latLongToBits(longitudeX1e7, &whole, &fraction),
+ *                               whole, fraction);
+ */
+char latLongToBits(int32_t thingX1e7, int32_t *pWhole, int32_t *pFraction);
+
+/** \fn void printLocation(int32_t latitudeX1e7, int32_t longitudeX1e7)
+ * @brief Print lat/long location as a clickable link.
+ * @param[in] latitudeX1e7 Latitude upto 7 decimal points
+ * @param[in] longitudeX1e7 Longitude upto 7 decimal points
+*/
+void printLocation(int32_t latitudeX1e7, int32_t longitudeX1e7);
+
+/** \fn int32_t getWifiScanPayload(char *pBuffer, int32_t bufferLength)
+ * @brief Get Wi-Fi Access Points 
+ * @param[in] pBuffer char array to be filled with APs information
+ * @param[in] bufferLength maximum length of the buffer
+ * @param[out] count length of the string received after Wi-Fi scan 
+*/
+int32_t getWifiScanPayload(char *pBuffer, int32_t bufferLength);
+
+
+/** \fn uint8_t getPosition(char *pBuffer, uLocation_t *location, bool useWifiPayload)
+ * @brief Function to get location using CellLocate service
+ * @param[in] pBuffer input buffer containing wifi payload if set to USE_WIFI
+ * @param[out] location To be filled when location is calculated
+ * @param[in] useWifiPayload A flag that indicates to use WIFI location if set to 1. 
+*/
+uint8_t getPosition(char *pBuffer, uLocation_t *location);
+
+/** \fn static int locationWifiHandler(const struct shell *shell, size_t argc, char **argv)
+ * @brief WiFi command handler function to get location using CellLocate service with WiFi
+ * @param[in] shell pointer to shell instance
+ * @param[in] argc count of arugments
+ * @param[in] argv pointer to array of arguments passed. 
+*/
+static int locationWifiHandler(const struct shell *shell, size_t argc, char **argv);
+
+/** \fn static int locationCellHandler(const struct shell *shell, size_t argc, char **argv)
+ * @brief Cell command handler function to get location using CellLocate service
+ * @param[in] shell pointer to shell instance
+ * @param[in] argc count of arugments
+ * @param[in] argv pointer to array of arguments passed. 
+*/
+static int locationCellHandler(const struct shell *shell, size_t argc, char **argv);
+
+/** \fn static int getConfigParameters(const struct shell *shell, size_t argc, char **argv)
+ * @brief Function to read configuration parameters
+ * @param[in] shell pointer to shell instance
+ * @param[in] argc count of arugments
+ * @param[in] argv pointer to array of arguments passed. 
+*/
+static int getConfigParameters(const struct shell *shell, size_t argc, char **argv);
+
+/** \fn static int setConfigParameters(const struct shell *shell, size_t argc, char **argv)
+ * @brief Function to set configuration parameters
+ * @param[in] shell pointer to shell instance
+ * @param[in] argc count of arugments
+ * @param[in] argv pointer to array of arguments passed. 
+*/
+static int setConfigParameters(const struct shell *shell, size_t argc, char **argv);
+
+/* ------------------------------------------------------------------------------
+ * GLOBALS
+ * -----------------------------------------------------------------------------*/
 
 int wifiApSignalStrength = -90;
 int numWifiAP = 15;
-#define CELL_LOCATE_TOKEN_MAXLEN   25
-#define CELL_LOCATE_SERVER_URL_MAXLEN  100
-#define APN_MAXLEN 50
 // CELL LOCATE Service Token 
 char cellLocateToken[CELL_LOCATE_TOKEN_MAXLEN+1];
 // CELL LOCATE Server address
@@ -77,32 +161,26 @@ uint32_t cellNetConnectStartTime;
 // flag to indicate whether the configuration is done or not 
 bool configurationDone = false;
 
-// ------------------------- GLOBALS END ---------------------------------
-
-
 /* ------------------------------------------------------------------------------
- * FUNCTIONS
+ * CALLBACK IMPLEMENTATION
  * -----------------------------------------------------------------------------*/
 
+static bool continueCellSearchCallback(uDeviceHandle_t deviceHandle)
+{
+    return (k_uptime_get() - cellNetConnectStartTime < (cellRegistrationTimeout*1000));
+}
 
-/** \fn void max10NoraCommEnable(void)
- * @brief Enabling communication between M10 and Nora-B1
-*/
+/* ------------------------------------------------------------------------------
+ * HELPER FUNCTION IMPLEMENTATION
+ * -----------------------------------------------------------------------------*/
 
-/** \fn char latLongToBits(int32_t thingX1e7, int32_t *pWhole, int32_t *pFraction)
- * @brief Convert a lat/long into a whole number and a bit-after-the-decimal-point that can be printed by a version of printf() 
- * that does not support floating point operations, returning the prefix (either "+" or "-").
- * The result should be printed with printf() format specifiers %c%d.%07d, e.g. something like:
- * int32_t whole;
- * int32_t fraction;
- * printf("%c%d.%07d/%c%d.%07d", latLongToBits(latitudeX1e7, &whole, &fraction),
- *                               whole, fraction,
- *                               latLongToBits(longitudeX1e7, &whole, &fraction),
- *                               whole, fraction);
- */
-char latLongToBits(int32_t thingX1e7,
-                          int32_t *pWhole,
-                          int32_t *pFraction)
+void failed(const char *msg)
+{
+    uPortLog(msg);
+    while(1);
+}
+
+char latLongToBits(int32_t thingX1e7, int32_t *pWhole, int32_t *pFraction)
 {
     char prefix = '+';
 
@@ -117,11 +195,6 @@ char latLongToBits(int32_t thingX1e7,
     return prefix;
 }
 
-/** \fn void printLocation(int32_t latitudeX1e7, int32_t longitudeX1e7)
- * @brief Print lat/long location as a clickable link.
- * @param[in] latitudeX1e7 Latitude upto 7 decimal points
- * @param[in] longitudeX1e7 Longitude upto 7 decimal points
-*/
 void printLocation(int32_t latitudeX1e7, int32_t longitudeX1e7)
 {
     char prefixLat ;
@@ -140,21 +213,6 @@ void printLocation(int32_t latitudeX1e7, int32_t longitudeX1e7)
              fractionLong);
 }
 
-/** \fn static bool continueCellSearch(uDeviceHandle_t deviceHandle)
- * @brief Indication to stop or continue CellConnect.
- * @param[in] deviceHandle device handle
-*/
-static bool continueCellSearch(uDeviceHandle_t deviceHandle)
-{
-    return (k_uptime_get() - cellNetConnectStartTime < (cellRegistrationTimeout*1000));
-}
-
-/** \fn int32_t getWifiScanPayload(char *pBuffer, int32_t bufferLength)
- * @brief Get Wi-Fi Access Points 
- * @param[in] pBuffer char array to be filled with APs information
- * @param[in] bufferLength maximum length of the buffer
- * @param[out] count length of the string received after Wi-Fi scan 
-*/
 int32_t getWifiScanPayload(char *pBuffer, int32_t bufferLength)
 {
     printk("Preparing to get WiFi Scan Payload..\r\n");
@@ -191,6 +249,7 @@ int32_t getWifiScanPayload(char *pBuffer, int32_t bufferLength)
     uAtClientLock(atClientHandle);
     printk("Setting AT client timeout \r\n");
     uAtClientTimeoutSet(atClientHandle, 5000);
+	uAtClientFlush(atClientHandle);
     // Command to perform a Wi-Fi scan operation and outputs Wi-Fi Location fingerprint
     // AT+ULOCWIFIFMT=<numAPs>,<rssiFilter>,<format>
     printk("Requesting Wi-Fi location fingerprint \r\n");
@@ -200,6 +259,7 @@ int32_t getWifiScanPayload(char *pBuffer, int32_t bufferLength)
     uAtClientWriteInt(atClientHandle, 0);
     uAtClientCommandStop(atClientHandle);
 
+    //Waiting for the response
     if (uAtClientResponseStart(atClientHandle, "+ULOCWIFIFMT:") == 0)
     {
         count = uAtClientReadString(atClientHandle, pBuffer, bufferLength, false);
@@ -216,12 +276,6 @@ int32_t getWifiScanPayload(char *pBuffer, int32_t bufferLength)
 
 }
 
-/** \fn uint8_t getPosition(char *pBuffer, uLocation_t *location, bool useWifiPayload)
- * @brief Function to get location using CellLocate service
- * @param[in] pBuffer input buffer containing wifi payload if set to USE_WIFI
- * @param[out] location To be filled when location is calculated
- * @param[in] useWifiPayload A flag that indicates to use WIFI location if set to 1. 
-*/
 uint8_t getPosition(char *pBuffer, uLocation_t *location)
 {
     int32_t uartHandle;
@@ -275,7 +329,7 @@ uint8_t getPosition(char *pBuffer, uLocation_t *location)
     uAtClientUnlock(atClientHandle);
     cellNetConnectStartTime = k_uptime_get();
     for (int i= 0; i< numofRetries &&  errorCode!= 0; i++){
-        errorCode = uCellNetConnect(cellHandle, NULL, aPN, NULL, NULL, continueCellSearch);
+        errorCode = uCellNetConnect(cellHandle, NULL, aPN, NULL, NULL, continueCellSearchCallback);
         uPortTaskBlock (500);
     }
     if (errorCode == 0) {
@@ -316,16 +370,11 @@ uint8_t getPosition(char *pBuffer, uLocation_t *location)
     printk("SARA-R5 powered off \r\n");
     return locationReceived;
 }
-/** \fn static int locationWifiHandler(const struct shell *shell, size_t argc, char **argv)
- * @brief WiFi command handler function to get location using CellLocate service with WiFi
- * @param[in] shell pointer to shell instance
- * @param[in] argc count of arugments
- * @param[in] argv pointer to array of arguments passed. 
-*/
+
 static int locationWifiHandler(const struct shell *shell, size_t argc, char **argv)
 {
     if (configurationDone == false){
-        shell_print(shell, "Before requesting location please complete the parameter configurtion using config command\r\n");
+        shell_print(shell, "Before requesting location please complete the parameter configuration using config command\r\n");
         return 1;
     }
     unsigned char buffer[1023];
@@ -348,12 +397,7 @@ static int locationWifiHandler(const struct shell *shell, size_t argc, char **ar
     return 0;
     
 }
-/** \fn static int locationCellHandler(const struct shell *shell, size_t argc, char **argv)
- * @brief Cell command handler function to get location using CellLocate service
- * @param[in] shell pointer to shell instance
- * @param[in] argc count of arugments
- * @param[in] argv pointer to array of arguments passed. 
-*/
+
 static int locationCellHandler(const struct shell *shell, size_t argc, char **argv)
 {
     if (configurationDone == false){
@@ -371,12 +415,7 @@ static int locationCellHandler(const struct shell *shell, size_t argc, char **ar
     }
     return 0;
 }
-/** \fn static int getConfigParameters(const struct shell *shell, size_t argc, char **argv)
- * @brief Function to read configuration parameters
- * @param[in] shell pointer to shell instance
- * @param[in] argc count of arugments
- * @param[in] argv pointer to array of arguments passed. 
-*/
+
 static int getConfigParameters(const struct shell *shell, size_t argc, char **argv)
 {
     shell_print(shell, "CellLocateServerURL: %s, Token: %s, APN: %s, CellRegistrationTimeout: %d, NumWifiAp: %d, WifiApSignalStrength: %d\r\n",\
@@ -391,12 +430,6 @@ static int getConfigParameters(const struct shell *shell, size_t argc, char **ar
 
 }
 
-/** \fn static int setConfigParameters(const struct shell *shell, size_t argc, char **argv)
- * @brief Function to set configuration parameters
- * @param[in] shell pointer to shell instance
- * @param[in] argc count of arugments
- * @param[in] argv pointer to array of arguments passed. 
-*/
 static int setConfigParameters(const struct shell *shell, size_t argc, char **argv)
 {
     if (argc == 7){
@@ -449,6 +482,17 @@ static int setConfigParameters(const struct shell *shell, size_t argc, char **ar
     }
     return 0;
 }
+
+/* ------------------------------------------------------------------------------
+ * SHELL COMMANDS
+ * 1- config
+ * 	1a- config set <CellLocateServerURL> <Token> <APN> <CellRegistrationTimeout(s)> <NumWifiAp> <WifiApSignalStrength(dbm)
+ * 	1b- config get
+ * 2- location LocationType 
+ * LocationType refers to cell or wifi 
+ * -----------------------------------------------------------------------------*/
+
+//2nd level of options 
 SHELL_STATIC_SUBCMD_SET_CREATE(location_type,
         SHELL_CMD(wifi, NULL, "Use wifi access points information to get location",
                                                locationWifiHandler),
@@ -461,11 +505,10 @@ SHELL_STATIC_SUBCMD_SET_CREATE(config_sub_cmd,
         SHELL_CMD(set,   NULL, "set configuration parameters: <CellLocateServerURL> <Token> <APN> <CellRegistrationTimeout(s)> <NumWifiAp> <WifiApSignalStrength(dbm)>", setConfigParameters),
         SHELL_SUBCMD_SET_END
 );
+
+//1st level of options
 SHELL_CMD_REGISTER(location, &location_type, "location command", NULL);
 SHELL_CMD_REGISTER(config, &config_sub_cmd, "Configuration of parameters", NULL);
-/** \fn void main(void)
- * @brief Main function of the code 
- */
 /* ----------------------------------------------------------------
  * MAIN FUNCTION
  * -------------------------------------------------------------- */
@@ -478,7 +521,6 @@ void main(void)
     uAtClientInit();
     uDeviceInit(); 
     uCellInit();
-    
-    printk("Enter command:\r\n");
+    printk("Enter your required shell commands. Type help for further details");
 	
 }
